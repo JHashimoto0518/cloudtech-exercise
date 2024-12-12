@@ -91,17 +91,33 @@ resource "aws_route" "api_routetable_route" {
 
 # セキュリティグループの作成
 # APIサーバおよびWebサーバに対するインバウンド通信は、「すべてのHTTP通信」のみとする
+# ただし、EC2インスタンスコネクト用のSSH通信は許可する
 resource "aws_security_group" "api_security_group" {
   name = "api-security-group"
   vpc_id = aws_vpc.reservation_vpc.id
 }
 
-resource "aws_security_group_rule" "api_security_group_rule" {
+resource "aws_security_group_rule" "api_security_group_rule_http" {
   type = "ingress"
   from_port = 80
   to_port = 80
   protocol = "tcp"
   cidr_blocks = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.api_security_group.id
+}
+
+data "aws_region" "current" {}
+
+data "aws_ec2_managed_prefix_list" "ec2_instance_connect_prefix_list" {
+  name = "com.amazonaws.${data.aws_region.current.name}.ec2-instance-connect"
+}
+
+resource "aws_security_group_rule" "api_security_group_rule_ssh" {
+  type = "ingress"
+  from_port = 22
+  to_port = 22
+  protocol = "tcp"
+  prefix_list_ids = [data.aws_ec2_managed_prefix_list.ec2_instance_connect_prefix_list.id]
   security_group_id = aws_security_group.api_security_group.id
 }
 
@@ -120,41 +136,41 @@ resource "aws_security_group_rule" "web_security_group_rule" {
 }
 
 # ⑤⑥の準備 最新のAmazon Linux 2023 AMIを参照
-data "aws_ami" "amazon_linux_2023" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*"]
-  }
-
-  filter {
-    name   = "state"
-    values = ["available"]
-  }
+data "aws_ssm_parameter" "al2023_ami" {
+  name = "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-6.1-x86_64"
 }
 
-# ⑤ APIサーバの構築
+# TODO: セットアップされていない
+# [ec2-user@ip-10-0-1-15 ~]$ sudo su
+# [root@ip-10-0-1-15 ec2-user]# cat /etc/systemd/system/goserver.service
+# cat: /etc/systemd/system/goserver.service: No such file or directory
+# [root@ip-10-0-1-15 ec2-user]# cat /etc/nginx/nginx.conf
+# cat: /etc/nginx/nginx.conf: No such file or directory
+
 resource "aws_instance" "api_server_01" {
-  ami = data.aws_ami.amazon_linux_2023.id
+  ami = data.aws_ssm_parameter.al2023_ami.value
   instance_type = "t2.micro"
   subnet_id = aws_subnet.api_subnet_01.id
   associate_public_ip_address = true
   vpc_security_group_ids = [aws_security_group.api_security_group.id]
+  user_data = file("api-server-user-data.sh")
   tags = {
     Name = "api-server-01"
+  }
+  # NOTE: aws_ssm_parameter.al2023_ami の値が変わってもリプレースしない
+  lifecycle {
+    ignore_changes = [ami]
   }
 }
 
 # ⑥ Webサーバの構築
-resource "aws_instance" "web_server_01" {
-  ami = data.aws_ami.amazon_linux_2023.id
-  instance_type = "t2.micro"
-  subnet_id = aws_subnet.web_subnet_01.id
-  associate_public_ip_address = true
-  vpc_security_group_ids = [aws_security_group.web_security_group.id]
-  tags = {
-    Name = "web-server-01"
-  }
-}
+# resource "aws_instance" "web_server_01" {
+#   ami = data.aws_ssm_parameter.al2023_ami.value
+#   instance_type = "t2.micro"
+#   subnet_id = aws_subnet.web_subnet_01.id
+#   associate_public_ip_address = true
+#   vpc_security_group_ids = [aws_security_group.web_security_group.id]
+#   tags = {
+#     Name = "web-server-01"
+#   }
+# }
